@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import time
 from datetime import datetime
+from pubnub.pnconfiguration import PNConfiguration
+from pubnub.pubnub import PubNub
+from pubnub.callbacks import SubscribeCallback
 
-# 1. Set up professional page layout configurations
+# 1. Setup layout page configurations
 st.set_page_config(
     page_title="High-Frequency Financial Stream Engine",
     page_icon="📈",
@@ -12,56 +13,81 @@ st.set_page_config(
 )
 
 st.title("📈 High-Frequency Financial Data Stream Engine")
-st.markdown("Retrieving real-time market ticks from Apache Kafka cluster and computing chronological analytics.")
+st.markdown("Retrieving real-time market telemetry from cloud stream brokers and rendering chronological analytics.")
 
-# 2. Create the layout columns for our visual cards
+# Initialize session state cache arrays for tracking sliding chart windows
+if 'chart_prices' not in st.session_state:
+    st.session_state.chart_prices = []
+if 'time_labels' not in st.session_state:
+    st.session_state.time_labels = []
+
+# 2. Establish layout columns for visual dashboard metric cards
 metric_col1, metric_col2, metric_col3 = st.columns(3)
 
 with metric_col1:
-    live_price_box = st.empty()  # Placeholder to update price dynamically
+    live_price_box = st.empty()
 with metric_col2:
-    moving_avg_box = st.empty()  # Placeholder to update moving average
+    moving_avg_box = st.empty()
 with metric_col3:
-    alert_box = st.empty()  # Placeholder for trading signals
+    alert_box = st.empty()
 
 st.markdown("---")
 st.subheader("📊 Volatility Tracker (Live Window)")
 chart_placeholder = st.empty()
 
-# 3. Simulating the live frontend render pipeline loop
-# (Once your Kafka consumer runs, this loop will read from the active buffer)
-if st.button("▶️ Connect to Live Ingestion Stream"):
-    # Mock data cache to initialize our line graph
-    historical_prices = list(np.random.normal(65000, 150, size=20))
 
-    while True:
-        # Generate dynamic price updates mirroring market behavior
-        latest_tick = round(historical_prices[-1] + np.random.normal(0, 45), 2)
-        historical_prices.append(latest_tick)
+# 3. Stream Handler Callback class to catch incoming data packets
+class DashboardStreamListener(SubscribeCallback):
+    def message(self, pubnub, message):
+        tick_data = message.message
+        current_price = tick_data['price']
+        timestamp = tick_data['timestamp']
 
-        if len(historical_prices) > 30:
-            historical_prices.pop(0)  # Maintain a sliding display window
+        # Append data to global runtime session cache
+        st.session_state.chart_prices.append(current_price)
+        st.session_state.time_labels.append(timestamp)
 
-        # Calculate moving averages on the active window
-        rolling_avg = round(sum(historical_prices[-10:]) / 10, 2)
+        # Maintain a clean 20-period sliding window size
+        if len(st.session_state.chart_prices) > 20:
+            st.session_state.chart_prices.pop(0)
+            st.session_state.time_labels.pop(0)
 
-        # Determine quick alert signals based on price crossing the average
-        if latest_tick > rolling_avg:
+        # Calculate moving window analytics
+        rolling_avg = sum(st.session_state.chart_prices[-10:]) / len(st.session_state.chart_prices[-10:])
+
+        # Determine quick alert trading breakout signals
+        if current_price > rolling_avg:
             signal, alert_type = "🟢 BULLISH BREAKOUT", "success"
         else:
-            signal, alert_type = "🔴 BEARISH RETRACEMENT", "inverse"
+            signal, alert_type = "🔴 BEARISH RETRACEMENT", "warning"
 
-        # 4. Stream data directly to the user interface blocks
-        live_price_box.metric(label="Live Asset Valuation (BTC-USD)", value=f"${latest_tick:,}")
-        moving_avg_box.metric(label="10-Period Rolling Window Avg", value=f"${rolling_avg:,}")
+        # 4. Push updates to metric blocks instantly
+        live_price_box.metric(label="Live Asset Valuation (BTC-USD)", value=f"${current_price:,.2f}")
+        moving_avg_box.metric(label="10-Period Rolling Window Avg", value=f"${rolling_avg:,.2f}")
 
         if alert_type == "success":
             alert_box.success(signal)
         else:
             alert_box.warning(signal)
 
-        # Update the line chart continuously
-        chart_placeholder.line_chart(historical_prices)
+        # Format metrics matrix to plot the line graph
+        chart_df = pd.DataFrame({
+            "Market Price": st.session_state.chart_prices
+        }, index=st.session_state.time_labels)
 
-        # Pause briefly to mimic a streaming ticker timeline
-        time.sleep(1)
+        chart_placeholder.line_chart(chart_df)
+
+
+# Initialize cloud broker network connection inside Streamlit view framework
+if st.button("▶️ Establish Live Stream Connection"):
+    pn_config = PNConfiguration()
+    pn_config.subscribe_key = "demo"
+    pn_config.user_id = "streamlit_dashboard"
+    pubnub = PubNub(pn_config)
+
+    st.toast("⚡ Connected to cloud data pipeline successfully!", icon="✅")
+
+    # Register the callback listener to process incoming ticks infinitely
+    stream_listener = DashboardStreamListener()
+    pubnub.add_listener(stream_listener)
+    pubnub.subscribe().channels("live-ticks").execute()

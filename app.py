@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from pubnub.pnconfiguration import PNConfiguration
-from pubnub.pubnub import PubNub
-from pubnub.callbacks import SubscribeCallback
+import json
+import time
+import os
 
-# 1. Setup layout page configurations
+# 1. Page Configuration
 st.set_page_config(
     page_title="High-Frequency Financial Stream Engine",
     page_icon="📈",
@@ -13,17 +12,10 @@ st.set_page_config(
 )
 
 st.title("📈 High-Frequency Financial Data Stream Engine")
-st.markdown("Retrieving real-time market telemetry from cloud stream brokers and rendering chronological analytics.")
+st.markdown("Connected Architecture: Actively consuming metrics from the live Producer pipeline stream.")
 
-# Initialize session state cache arrays for tracking sliding chart windows
-if 'chart_prices' not in st.session_state:
-    st.session_state.chart_prices = []
-if 'time_labels' not in st.session_state:
-    st.session_state.time_labels = []
-
-# 2. Establish layout columns for visual dashboard metric cards
+# 2. Design Layout Cards
 metric_col1, metric_col2, metric_col3 = st.columns(3)
-
 with metric_col1:
     live_price_box = st.empty()
 with metric_col2:
@@ -35,59 +27,62 @@ st.markdown("---")
 st.subheader("📊 Volatility Tracker (Live Window)")
 chart_placeholder = st.empty()
 
+# Initialize data arrays in session memory
+if 'prices' not in st.session_state:
+    st.session_state.prices = []
+if 'timestamps' not in st.session_state:
+    st.session_state.timestamps = []
 
-# 3. Stream Handler Callback class to catch incoming data packets
-class DashboardStreamListener(SubscribeCallback):
-    def message(self, pubnub, message):
-        tick_data = message.message
-        current_price = tick_data['price']
-        timestamp = tick_data['timestamp']
+# 3. Connect Button
+if st.button("▶️ Connect to Live Ingestion Stream"):
+    st.toast("⚡ Successfully connected to the producer stream buffer!", icon="🔌")
 
-        # Append data to global runtime session cache
-        st.session_state.chart_prices.append(current_price)
-        st.session_state.time_labels.append(timestamp)
+    status_text = st.empty()
 
-        # Maintain a clean 20-period sliding window size
-        if len(st.session_state.chart_prices) > 20:
-            st.session_state.chart_prices.pop(0)
-            st.session_state.time_labels.pop(0)
+    # 4. Continuous Consumer Processing Loop
+    while True:
+        status_text.caption("🔍 Consumer active: Reading packets from stream buffer...")
 
-        # Calculate moving window analytics
-        rolling_avg = sum(st.session_state.chart_prices[-10:]) / len(st.session_state.chart_prices[-10:])
+        # Check if the producer has generated the file yet
+        if os.path.exists("stream_buffer.json"):
+            try:
+                # Read the latest tick data written by the producer
+                with open("stream_buffer.json", "r") as f:
+                    latest_packet = json.load(f)
 
-        # Determine quick alert trading breakout signals
-        if current_price > rolling_avg:
-            signal, alert_type = "🟢 BULLISH BREAKOUT", "success"
-        else:
-            signal, alert_type = "🔴 BEARISH RETRACEMENT", "warning"
+                current_price = latest_packet['price']
+                timestamp = latest_packet['timestamp']
 
-        # 4. Push updates to metric blocks instantly
-        live_price_box.metric(label="Live Asset Valuation (BTC-USD)", value=f"${current_price:,.2f}")
-        moving_avg_box.metric(label="10-Period Rolling Window Avg", value=f"${rolling_avg:,.2f}")
+                # Only update if it's a completely new tick timestamp
+                if not st.session_state.timestamps or st.session_state.timestamps[-1] != timestamp:
+                    st.session_state.prices.append(current_price)
+                    st.session_state.timestamps.append(timestamp)
 
-        if alert_type == "success":
-            alert_box.success(signal)
-        else:
-            alert_box.warning(signal)
+                    # Keep a neat 20-period viewing frame window
+                    if len(st.session_state.prices) > 20:
+                        st.session_state.prices.pop(0)
+                        st.session_state.timestamps.pop(0)
 
-        # Format metrics matrix to plot the line graph
-        chart_df = pd.DataFrame({
-            "Market Price": st.session_state.chart_prices
-        }, index=st.session_state.time_labels)
+                    # Compute rolling averages (Analytical Consumer Layer)
+                    recent_window = st.session_state.prices[-10:]
+                    rolling_avg = round(sum(recent_window) / len(recent_window), 2)
 
-        chart_placeholder.line_chart(chart_df)
+                    # Update metrics display objects instantly
+                    live_price_box.metric(label="Live Asset Valuation (BTC-USD)", value=f"${current_price:,.2f}")
+                    moving_avg_box.metric(label="10-Period Rolling Window Avg", value=f"${rolling_avg:,.2f}")
 
+                    if current_price > rolling_avg:
+                        alert_box.success("🟢 BULLISH BREAKOUT")
+                    else:
+                        alert_box.warning("🔴 BEARISH RETRACEMENT")
 
-# Initialize cloud broker network connection inside Streamlit view framework
-if st.button("▶️ Establish Live Stream Connection"):
-    pn_config = PNConfiguration()
-    pn_config.subscribe_key = "demo"
-    pn_config.user_id = "streamlit_dashboard"
-    pubnub = PubNub(pn_config)
+                    # Re-plot the dataframe to update the chart lines
+                    chart_df = pd.DataFrame({"Market Price": st.session_state.prices},
+                                            index=st.session_state.timestamps)
+                    chart_placeholder.line_chart(chart_df)
 
-    st.toast("⚡ Connected to cloud data pipeline successfully!", icon="✅")
+            except Exception as e:
+                # Handle temporary file read collisions gracefully
+                pass
 
-    # Register the callback listener to process incoming ticks infinitely
-    stream_listener = DashboardStreamListener()
-    pubnub.add_listener(stream_listener)
-    pubnub.subscribe().channels("live-ticks").execute()
+        time.sleep(0.5)  # Scan the buffer frequently for snappy updates

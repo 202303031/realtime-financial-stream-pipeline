@@ -2,38 +2,30 @@ import time
 import json
 import random
 from datetime import datetime
-from pubnub.pnconfiguration import PNConfiguration
-from pubnub.pubnub import PubNub
-
-# 1. Configure the cloud stream broker
-pn_config = PNConfiguration()
-pn_config.subscribe_key = "demo"  # Public demo keys provided by PubNub
-pn_config.publish_key = "demo"
-pn_config.user_id = "financial_producer"
-pubnub = PubNub(pn_config)
 
 
 def generate_market_ticks():
-    """Simulates high-frequency asset price movements."""
     base_price = 65000.00
-    print("📡 Cloud Ingestion Engine Active. Broadcasting live ticks to 'live-ticks' channel...")
+    print("📡 Ingestion Engine Active. Broadcasting live ticks to local storage...")
 
     while True:
-        # Simulate high-frequency market variance
+        # Simulate market price variance
         price_change = random.normalvariate(0, 15)
         base_price = round(base_price + price_change, 2)
+        timestamp = datetime.now().strftime("%H:%M:%S")
 
         payload = {
             "ticker": "BTC-USD",
             "price": base_price,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
+            "timestamp": timestamp
         }
 
-        # Publish directly to the cloud streaming infrastructure
-        pubnub.publish().channel("live-ticks").message(payload).sync()
-        print(f"✅ Broadcasted Packet: {payload}")
+        # Write the payload to a shared local file buffer
+        with open("stream_buffer.json", "w") as f:
+            json.dump(payload, f)
 
-        time.sleep(1.5)  # Stream an update every 1.5 seconds
+        print(f"✅ Broadcasted Packet: {payload}")
+        time.sleep(1.0)  # Push a new update every second
 
 
 if __name__ == '__main__':
